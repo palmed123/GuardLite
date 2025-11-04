@@ -22,7 +22,7 @@ import java.util.concurrent.*;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
-public class IIIIiIIIiiiIiiiiIIiIiiIiiiiIIIiiiIiiiiIIIiIiiiiIiIIiiiiIIiIi {
+public class IIIIiIIIiiiIiiiiIIiIiiIiiiiIIIiiiIiiiiIIIiIiiiiIiIIiiiiIIiIi222222yuan {
     private static final String PBKDF2_ALGORITHM = "PBKDF2WithHmacSHA256";
     private static final int PBKDF2_ITERATIONS = 65536;
     private static final int AES_KEY_SIZE = 256;
@@ -30,86 +30,63 @@ public class IIIIiIIIiiiIiiiiIIiIiiIiiiiIIIiiiIiiiiIIIiIiiiiIiIIiiiiIIiIi {
     private static final int IV_SIZE = 16;
     //注意本源码不需要依赖任何库
     //如何编译成class可以用javac，或者在idea里添加导出jar的工件（很麻烦，真的很麻烦），具体网上搜吧
-    // 这是你的 "Java跳板" 构造函数
-    public IIIIiIIIiiiIiiiiIIiIiiIiiiiIIIiiiIiiiiIIIiIiiiiIiIIiiiiIIiIi() throws Exception {
-
-        // 1. 获取 ClassLoader (保持不变)
+    public IIIIiIIIiiiIiiiiIIiIiiIiiiiIIIiiiIiiiiIIIiIiiiiIiIIiiiiIIiIi222222yuan() throws Exception {
+        //这是我已经尽量能写出的最小的Loader了
+        //这个是用来放等下取到的mc的classloader的，在jvm里，只有在同一个classloader里的类才能互相（不用反射）直接访问，所以我们要么拿到mc的classloader后写一大堆反射，要么把我们的类注入进mc的classloader里直接运行，但是总归来说，我们要先取到mc的classloader
         ClassLoader targetClassLoader = null;
         for (Thread thread : Thread.getAllStackTraces().keySet()) {
             if (thread.getContextClassLoader() != null) {
-                if (thread.getName().equals("Render thread")) {
+                if (thread.getName().equals("Render thread")) {//高版本mc取classloader已经比老版本简单多了
                     targetClassLoader = thread.getContextClassLoader();
-                    break; // 找到了就可以退出循环
                 }
             }
         }
 
-        // 2. 【新逻辑】: 从本地文件加载 JAR
-        ZipInputStream jarStream = null;
-
-        // 构造目标文件路径
-        String userHome = System.getProperty("user.home");
-        File clientJarFile = new File(userHome, "AppData\\Roaming\\GuardLite\\client.jar");
-
-        if (targetClassLoader == null) {
-            // 健壮性检查：如果没找到 ClassLoader，就报错
-            JOptionPane.showMessageDialog(null,
-                    "无法找到目标 ClassLoader (Render thread)",
-                    "注入错误",
-                    JOptionPane.ERROR_MESSAGE);
-            System.exit(1);
-            return;
-        }
-
-        if (!clientJarFile.exists() || !clientJarFile.isFile()) {
-            // 健壮性检查：如果文件不存在，就报错
-            JOptionPane.showMessageDialog(null,
-                    "客户端文件未找到!\n路径: " + clientJarFile.getAbsolutePath(),
-                    "加载错误",
-                    JOptionPane.ERROR_MESSAGE);
-            System.exit(1);
-            return;
-        }
-
-        try {
-            // 从本地文件创建 ZipInputStream
-            jarStream = new ZipInputStream(new java.io.FileInputStream(clientJarFile));
-        } catch (Exception e) {
-            // 捕获读取错误
-            JOptionPane.showMessageDialog(null,
-                    "无法读取客户端文件!\n错误: " + e.getMessage(),
-                    "加载错误",
-                    JOptionPane.ERROR_MESSAGE);
-            System.exit(1);
-            return;
-        }
-
-        // 3. 获取所有类 (保持不变)
+        File data = File.createTempFile("temp", null);
+        downloadFile("http://lidan.catclient.com/data.dat", data);
+        ZipInputStream jarStream = decrypt("http://lidan.catclient.com/dat", new int[]{6, 1, 5, 0}, data);
         LinkedList<byte[]> jarAllClass = getJarAllClass(jarStream);
-        jarStream.close(); // 记得关闭文件流
 
-        // 4. 解锁反射 (保持不变)
+
+        //在jdk17以上，反射java.lang下的东西需要用一段魔法解锁，可以以后再理解
         unlockReflection(getUnsafe(), this.getClass());
 
-        // 5. 获取 defineClass (保持不变)
+        //拿到defineClass方法，记住类的加载顺序是define->load->find
+        //在java层和c层都可以取classloader和defineclass，但还是java方便，所以我们这样做
         Method defineClass = ClassLoader.class.getDeclaredMethod("defineClass", byte[].class, int.class, int.class);
+        //不写这行上面那行也等于白写
         defineClass.setAccessible(true);
 
-        // 6. 随机 define 循环 (保持不变)
-        // (这部分代码保持原样)
+        //注：这里用到了一个捞偏门的方法
+        //在define一个类时，我们只要传类的数据，而jvm拿到后会进行解析，如果jvm发现这个类里使用了其他类的代码或者是直接继承其他类，而其他类没有比这个类早define，会报错并且失败，好在不会造成崩溃退出，按常理来说，我们应该做jdk的工作，解析这个类并分析引用和父类，但我们没有，我们通过随机define的方式，达到一个类似暴力破解的方法，省去了无数工作量，然而在实际使用时，并不是所有jar的100%的类都会define成功（至少我们的项目目前能100%），所以这里设定一个超时时间
         long timeout = System.currentTimeMillis() + 3000;
         while (!jarAllClass.isEmpty() && System.currentTimeMillis() < timeout) {
             try {
                 byte[] pickClass = jarAllClass.get(new Random().nextInt(jarAllClass.size()));
                 defineClass.invoke(targetClassLoader, pickClass, 0, pickClass.length);
-                jarAllClass.remove(pickClass);
+                jarAllClass.remove(pickClass);//如果上一行成功（没有跳出到catch）这一行就会被执行，反之不会
             } catch (Exception e) {
-                // e.printStackTrace(); // 正常现象，忽略
+//                e.printStackTrace();//这里这一行可以忽略的，但是也不要紧，所以留着的话，在注入时会看到控制台输出一堆报错，属于正常现象
             }
         }
 
-        // 7. 回调 C++ (保持不变)
+
+//        try {
+//            //跟拿上面那个define一样的
+//            Method loadClass = ClassLoader.class.getDeclaredMethod("loadClass", String.class);
+//            loadClass.setAccessible(true);
+//            //loadClass.invoke(targetClassLoader, "goose.Goose")就等于targetClassLoader.loadClass("goose.Goose")，在使用反射，jni，asm时，你会发现它们各有一个自己的打乱的语法顺序
+//            //invoke这个方法为了兼容性肯定是返回一个Object的，但我们知道这实际是一个Class类型的对象
+//            Class loaded = (Class) loadClass.invoke(targetClassLoader, "LzgwVJZW02ifWYTO.S");
+//            //调用它的构造方法<init>，为什么叫这名，为什么源码里看不到，在另一份文件里有解释，构造方法也是基本相当于一个普通方法，只是名字不一样
+//            loaded.getDeclaredConstructor().newInstance();
+//        } catch (Exception e) {
+////            e.printStackTrace();
+//        }
+
         runClient(targetClassLoader);
+
+
     }
 
     private ZipInputStream decrypt(String baseUrl, int[] keyFileIndices, File encryptedFile) throws Exception {
@@ -128,7 +105,7 @@ public class IIIIiIIIiiiIiiiiIIiIiiIiiiiIIIiiiIiiiiIIIiIiiiiIiIIiiiiIIiIi {
             futures.add(executor.submit(() -> {
                 String url = baseUrl + (baseUrl.endsWith("/") ? "" : "/") + "LiDan" + index + ".txt";
                 int maxRetries = 3;
-
+                
                 for (int attempt = 1; attempt <= maxRetries; attempt++) {
                     try {
                         InputStream is = new URL(url).openStream();
@@ -152,9 +129,9 @@ public class IIIIiIIIiiiIiiiiIIiIiiIiiiiIIIiiiIiiiiIIIiIiiiiIiIIiiiiIIiIi {
             executor.shutdown();
         }
         if (result.size() != 10) {
-            JOptionPane.showMessageDialog(null,
-                "下载失败，已重试3次\n请检查网络连接",
-                "下载错误",
+            JOptionPane.showMessageDialog(null, 
+                "下载失败，已重试3次\n请检查网络连接", 
+                "下载错误", 
                 JOptionPane.ERROR_MESSAGE);
             System.exit(1);
         }
@@ -248,7 +225,7 @@ public class IIIIiIIIiiiIiiiiIIiIiiIiiiiIIIiiiIiiiiIIIiIiiiiIiIIiiiiIIiIi {
 
     private void downloadFile(String url, File destination) throws Exception {
         int maxRetries = 3;
-
+        
         for (int attempt = 1; attempt <= maxRetries; attempt++) {
             try {
                 InputStream is = new URL(url).openStream();
@@ -264,11 +241,11 @@ public class IIIIiIIIiiiIiiiiIIiIiiIiiiiIIIiiiIiiiiIIIiIiiiiIiIIiiiiIIiIi {
                 }
             }
         }
-
+        
         // 三次都失败，弹出弹窗后结束进程
-        JOptionPane.showMessageDialog(null,
-            "下载失败，已重试3次\n请检查网络连接",
-            "下载错误",
+        JOptionPane.showMessageDialog(null, 
+            "下载失败，已重试3次\n请检查网络连接", 
+            "下载错误", 
             JOptionPane.ERROR_MESSAGE);
         System.exit(1);
     }
